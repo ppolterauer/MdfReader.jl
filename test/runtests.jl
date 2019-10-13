@@ -2,5 +2,5 @@ using mdfReader
 using Test
 
 @testset "mdfReader.jl" begin
-    # Write your own tests here.
+    @test mdfReader.open("testfiles/test.mdf")
 end
