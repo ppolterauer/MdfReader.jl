@@ -1,2 +1,5 @@
+using Infiltrator
 using mdfReader
-io = mdfReader.open("test\\testfiles\\test.mdf")
+mdf = "test\\testfiles\\test.mdf"
+channelNames(mdf)
+mdfReader.test()

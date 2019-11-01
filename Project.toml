@@ -3,6 +3,10 @@ uuid = "dad4a21f-94ad-4dc7-9bea-ace7567055b1"
 authors = ["Philipp Polterauer"]
 version = "0.1.0"
 
+[deps]
+InteractiveUtils = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+
 [compat]
 julia = "1"
 
