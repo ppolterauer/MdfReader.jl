@@ -1,17 +1,23 @@
-module mdfReader
+module MdfReader
 	import InteractiveUtils.subtypes
-	export HDBLOCK,IDBLOCK,DGBLOCK,TXBLOCK,PRBLOCK,BLOCK
+	# export HDBLOCK,IDBLOCK,DGBLOCK,TXBLOCK,PRBLOCK,BLOCK
 	export linkoffset,BlockLink
 	export channelNames
 
 	struct CHAR
 		x :: UInt8
 	end
+	struct BOOL
+		x :: UInt16
+	end
+	struct REAL
+		x :: Float64
+	end
 	Base.Char(c::CHAR) = Base.Char(c.x)
 	Base.show(io::IO,c::CHAR) = print(io,Char(c))
 	Base.string(c::NTuple{x,CHAR}) where x = join(Char.(c))
 	Base.show(io::IO,c::NTuple{x,CHAR}) where x= print(io,string(c))
-	
+
 	nCHAR(n) = NTuple{n,CHAR}
 
 	struct BlockLink
@@ -30,10 +36,15 @@ module mdfReader
 	Base.string(hd::BlockHeader) = string(hd.type)
 	typestr(hd::BlockHeader) = string(hd)*"BLOCK"
 
-
 	abstract type BLOCK end
 	header(b::BLOCK) = b.header
-
+	"""
+		BLOCK(hd)
+		instantiates the Block depending on its header
+	"""
+	function BLOCK(hd::BlockHeader)
+		getfield(MdfReader, Symbol(typestr(hd)))()
+	end
 	struct HDBLOCK<:BLOCK
 	    header :: BlockHeader
 	    dataGroupBlock              :: BlockLink
@@ -68,15 +79,52 @@ module mdfReader
 	end
 
 	struct DGBLOCK<:BLOCK
-	    header :: BlockHeader
-	    nextDataGroupBlock          :: BlockLink
-	    firstChannelGroupBlock      :: BlockLink
-	    triggerBlock                :: BlockLink
+		header :: BlockHeader
+		nextDataGroupBlock          :: BlockLink
+		firstChannelGroupBlock      :: BlockLink
+		triggerBlock                :: BlockLink
+		dataBlock                   :: BlockLink
+		numberChannelGroups         :: UInt16
+		numverRecordIDs             :: UInt16
+		Reserved                    :: UInt32
+		DGBLOCK() = new()
+	end
+
+	struct CGBLOCK<:BLOCK
+	    header 						:: BlockHeader
+    	nextChannelGroupBlock       :: BlockLink
+	    firstChannelBlock      		:: BlockLink
+	    comment                		:: BlockLink
 	    dataBlock                   :: BlockLink
-	    numberChannelGroups         :: UInt16
-	    numverRecordIDs             :: UInt16
-	    Reserved                    :: UInt32
-	    DGBLOCK() = new()
+	    recordID			        :: UInt16
+	    numberChannels              :: UInt16
+	    sizeDataRecord              :: UInt16
+		numberRecords	            :: UInt32
+		firstSampleReductionBlock   :: BlockLink
+	    CGBLOCK() = new()
+	end
+
+	struct CNBLOCK<:BLOCK
+		header 						:: BlockHeader
+		nextChannelBlock	        :: BlockLink
+		conversionFormula      		:: BlockLink
+		sourceDependingExtension   	:: BlockLink
+		dependencyBlock	 			:: BlockLink
+		comment 		 			:: BlockLink
+		channelType			        :: UInt16
+		shortSignalName             :: nCHAR(32)
+		signalDescription           :: nCHAR(128)
+		startOffset                 :: UInt16
+		numberOfBits	            :: UInt16
+		signalDataType	            :: UInt16
+		valueRangeValid	            :: BOOL
+		minimumSignalValue 		    :: REAL
+		maximumSignalValue 		    :: REAL
+		samplingRate 				:: REAL
+		longSignalName	 			:: BlockLink
+		displayName		 			:: BlockLink
+		additionalByteOffset		:: UInt16
+		CNBLOCK() = new()
 	end
 
 	struct TXBLOCK<:BLOCK
@@ -94,11 +142,15 @@ module mdfReader
 	    nb = size(hd)-sizeof(hd)
 	    str = String(Char.(read(io,nb)))
 	end
+
+	# TODO: make read block such that it only reads the blocksize number of
+	# fields and makes the other fields without content. (e.g. zero)
+
 	linkfields(b::DataType) = [fieldname(b,i) for i in 1:fieldcount(b) if fieldtype(b,i)==BlockLink]
 	linkfields(b) = linkfields(typeof(b))
 
-	isBlockType(hd::BlockHeader) = typestr(hd) in string.(subtypes(BLOCK))
-	type(hd::BlockHeader) = eval(Symbol(typestr(hd)))
+	isBlockType(hd::BlockHeader) = type(hd) in subtypes(BLOCK)
+	type(hd::BlockHeader) = getfield(Main,Symbol(typestr(hd)))
 
 	"""
 		linkoffset(b)
@@ -107,12 +159,12 @@ module mdfReader
 	"""
 	function linkoffset(b::Type{T}) where T<:BLOCK
 		[fieldoffset(b,i) for i in 1:fieldcount(b) if fieldtype(b,i)==BlockLink]
-	end	
+	end
 
 	function readlink(io,pos)
 		seek(io,pos)
 		read(io,BlockLink)
-	end	
+	end
 	function readlinks(io,hd)
 		sz  = sizeof(hd)
 		loffs = linkoffset(type(hd))
@@ -122,11 +174,6 @@ module mdfReader
 	Base.size(hd::BlockHeader) = hd.size
 
 
-	struct Block
-	    header   :: BlockHeader
-	    position :: BlockLink
-	    links    :: Vector{BlockLink}
-	end
 	links(b) = b.links
 	type(b) = type(b.header)
 	function Base.read(io::IO,x)
@@ -143,62 +190,91 @@ module mdfReader
 	  type: $(typestr(b))
 	  size: $(size(b))
 	")
-	function readBlock(io::IO)
-		pos = position(io)
-		hd  = read(io,BlockHeader)
-		sz  = hd.size
-		val = valid(hd) # check validity of block header
-		if val
-			links = readlinks(io,hd)
+	# function readBlock(io::IO)
+	# 	pos = position(io)
+	# 	hd  = read(io,BlockHeader)
+	# 	sz  = hd.size
+	#
+	# 	val = valid(hd) # check validity of block header
+	# 	if val
+	# 		b = BLOCK(hd)
+	# 	end
+	# 	if val
+	# 		links = readlinks(io,hd)
+	# 	else
+	# 		@warn "Invalid block header encountered at $pos\n"*repr(hd)
+	# 		links = []
+	# 	end
+	# end
+	function readBlock(io)
+		hd = read(io,BlockHeader)
+		if valid(hd)
+			b = read(io,type(hd)) # call a generic block reader
 		else
-			@warn "Invalid block header encountered at $pos\n"*repr(hd)
-			links = []
+			@error "invalid header:\n $hd\n encountered"
 		end
-		# move to end of block
-		if val seek(io,pos+sz) end
-		(Block(hd,pos,links),val)
+		if valid(b)
+			b
+		else
+			@error "invalid block: \n $b\n encountered"
+		end
 	end
-	function readBlocks(io::IO)
-		blocks = Vector{Block}(undef,0)
-		id = read(io,IDBLOCK) # file should always contain a identifier header
-		val = true;
-		while ~eof(io) & val
-		    b,val = readBlock(io)
-		    if val push!(blocks,b) end # if valid push header
-		end
-		blocks
+	function readBlock(io,link::BlockLink)
+		seek(io,link)
+		readBlock(io)
+	end
+	# function readBlocks(io::IO)
+	# 	blocks = Vector{Block}(undef,0)
+	# 	id = read(io,IDBLOCK) # file should always contain a identifier header
+	# 	val = true;
+	# 	while ~eof(io) & val
+	# 	    b,val = readBlock(io)
+	# 	    if val push!(blocks,b) end # if valid push header
+	# 	end
+	# 	blocks
+	# end
+	function next(b::DGBLOCK)
+		b.nextDataGroupBlock
 	end
 	valid(hd::BlockHeader) = (size(hd)>0) & isBlockType(hd)
-	valid(b::BLOCK) = valid(header(b)) & (typestr(header(b))==string(typeof(b)))
-	function test()
-		@show "hallasdasdadasdsadasdasdo"
+	function valid(b::BLOCK)
+		valid(header(b)) & (typestr(header(b))==string(typeof(b)))
 	end
 	function channelNames(mdf)
 		open(mdf) do io
 			id = read(io,IDBLOCK)
 			hd = read(io,HDBLOCK)
-			# get channel group link from hd block
-			dglink = hd.dataGroupBlock
-			nDG    = hd.numberDataGroups
-			## read all dgBlocks
-		    dgBlocks 	= Vector{DGBLOCK}(undef,0)
-		    seek(io,dglink)
-		    done 		= false
-		    while ~done
-		    	dg = read(io,DGBLOCK)
-		    	@show dg
-		    	if valid(dg) 
-		    		push!(dgBlocks,dg)
-		    		if isNill(dg.nextDataGroupBlock)
-		    			done = true
-	    			else
-	    				seek(io,dg.nextDataGroupBlock)
-		    		end
-		    	else
-		    		done = true
-		    	end
-		    end
-		    @show dgBlocks
+
+			dgs 	 = Array{DGBLOCK,1}(undef,0)
+			dgblock  = readBlock(io,hd.dataGroupBlock)
+			dglink 	 = next(dgblock)
+			if dglink
+				@show b = readBlock(io,dglink)
+				push!(dgs,b)
+			end
+
+			# dataGroups = []
+			# if valid(dg)
+			# # get channel group link from hd block
+			# dglink = hd.dataGroupBlock
+			# nDG    = hd.numberDataGroups
+
+
+			(id,hd,dgblock)
+
+		    # done 		= false
+		    # while ~done
+		    # 	if valid(dg)
+		    # 		push!(dgBlocks,dg)
+		    # 		if isNill(dg.nextDataGroupBlock)
+		    # 			done = true
+	    	# 		else
+	    	# 			seek(io,dg.nextDataGroupBlock)
+		    # 		end
+		    # 	else
+		    # 		done = true
+		    # 	end
+		    # end
 		end
 	end
 end

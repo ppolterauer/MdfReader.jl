@@ -1,5 +1,9 @@
 using Infiltrator
-using mdfReader
+using MdfReader
+
 mdf = "test\\testfiles\\test.mdf"
-channelNames(mdf)
-mdfReader.test()
+id,hd,dg = channelNames(mdf)
+@show id
+@show hd
+
+dg

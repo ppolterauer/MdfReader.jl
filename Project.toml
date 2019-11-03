@@ -1,4 +1,4 @@
-name = "mdfReader"
+name = "MdfReader"
 uuid = "dad4a21f-94ad-4dc7-9bea-ace7567055b1"
 authors = ["Philipp Polterauer"]
 version = "0.1.0"
